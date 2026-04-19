@@ -84,9 +84,9 @@
                     </label>
                 </div>
 
-                <!-- <div class="captcha-container" id="captcha-box">
+                <div class="captcha-container" id="captcha-box">
                     <div class="cf-turnstile" data-sitekey="<?php echo defined('TURNSTILE_SITE_KEY') ? TURNSTILE_SITE_KEY : ''; ?>" data-theme="dark"></div>
-                </div> -->
+                </div>
 
                 <button type="submit" class="btn-auth">Create Account</button>
             </form>

@@ -24,15 +24,12 @@ if ($action === 'submit_inquiry') {
             exit;
         }
 
-        // Verify CAPTCHA (Turnstile) - DISABLED
-        /*
+        // Verify CAPTCHA (Turnstile)
         $captchaVerify = verifyTurnstile($_POST['cf-turnstile-response'] ?? null, $_SERVER['REMOTE_ADDR']);
         if (!$captchaVerify['success']) {
             echo json_encode(['success' => false, 'message' => $captchaVerify['message']]);
             exit;
         }
-        */
-        $captchaVerify = ['success' => true];
 
         $db = db();
         

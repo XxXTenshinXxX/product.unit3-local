@@ -22,15 +22,12 @@ if ($action === 'signup') {
         exit;
     }
 
-    // Verify CAPTCHA - DISABLED
-    /*
+    // Verify CAPTCHA
     $captchaVerify = verifyTurnstile($_POST['cf-turnstile-response'] ?? null, $_SERVER['REMOTE_ADDR']);
     if (!$captchaVerify['success']) {
         echo json_encode(['success' => false, 'message' => $captchaVerify['message']]);
         exit;
     }
-    */
-    $captchaVerify = ['success' => true];
 
     // Check if email exists
     $db = db();
@@ -77,16 +74,13 @@ if ($action === 'login') {
             exit;
         }
 
-        // Verify CAPTCHA - DISABLED
-        /*
+        // Verify CAPTCHA
         $captchaVerify = verifyTurnstile($_POST['cf-turnstile-response'] ?? null, $_SERVER['REMOTE_ADDR']);
         if (!$captchaVerify['success']) {
             if (ob_get_length()) ob_clean();
             echo json_encode(['success' => false, 'message' => $captchaVerify['message']]);
             exit;
         }
-        */
-        $captchaVerify = ['success' => true];
 
         $db = db();
         // Check admins table first for administrative priority - Using case-insensitive search

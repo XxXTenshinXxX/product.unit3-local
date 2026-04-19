@@ -390,11 +390,11 @@ $featuredProducts = $db->fetchAll("
                                     style="width: 100%; padding: 12px; border-radius: 8px; background: rgba(255,255,255,0.05); border: 1px solid var(--border-color); color: #fff; height: 100px; resize: none;"></textarea>
                             </div>
 
-                            <!-- <div class="captcha-box">
+                            <div class="captcha-box">
                                 <div class="cf-turnstile"
                                     data-sitekey="<?php echo defined('TURNSTILE_SITE_KEY') ? TURNSTILE_SITE_KEY : ''; ?>"
                                     data-theme="dark" data-size="normal"></div>
-                            </div> -->
+                            </div>
 
                             <button type="submit" class="primary-btn"
                                 style="width: 100%; padding: 14px; border: none; border-radius: 8px; cursor: pointer; font-weight: 700;">
