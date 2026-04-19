@@ -4,6 +4,9 @@ require_once __DIR__ . '/../includes/Mailer.php';
 
 header('Content-Type: application/json');
 
+// Ensure no stray output corrupts the JSON response
+if (ob_get_length()) ob_clean();
+
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
 
 if ($action === 'signup') {
@@ -18,6 +21,16 @@ if ($action === 'signup') {
         echo json_encode(['success' => false, 'message' => 'All fields are required.']);
         exit;
     }
+
+    // Verify CAPTCHA - DISABLED
+    /*
+    $captchaVerify = verifyTurnstile($_POST['cf-turnstile-response'] ?? null, $_SERVER['REMOTE_ADDR']);
+    if (!$captchaVerify['success']) {
+        echo json_encode(['success' => false, 'message' => $captchaVerify['message']]);
+        exit;
+    }
+    */
+    $captchaVerify = ['success' => true];
 
     // Check if email exists
     $db = db();
@@ -38,133 +51,238 @@ if ($action === 'signup') {
         'email' => $email,
         'password' => $hashed_password,
         'role' => 'user',
-        'status' => 'pending'
+        'status' => 'active',
+        'status_updated_at' => date('Y-m-d H:i:s')
     ]);
 
     if ($userId) {
+        // Notify admin of new registration
+        addNotification("New Registration", "A new user account ({$firstname} {$lastname}) has been created.", 'info', 'admin');
         echo json_encode(['success' => true, 'message' => 'Registration successful!']);
+        exit;
     } else {
         echo json_encode(['success' => false, 'message' => 'Registration failed. Please try again.']);
+        exit;
     }
 }
 
 if ($action === 'login') {
-    $email = sanitize($_POST['email'] ?? '');
-    $password = $_POST['password'] ?? '';
+    try {
+        $email = sanitize($_POST['email'] ?? '');
+        $password = $_POST['password'] ?? '';
 
-    if (empty($email) || empty($password)) {
-        echo json_encode(['success' => false, 'message' => 'Email and password are required.']);
-        exit;
-    }
-
-    // Verify CAPTCHA
-    $captchaVerify = verifyTurnstile($_POST['cf-turnstile-response'] ?? null, $_SERVER['REMOTE_ADDR']);
-    if (!$captchaVerify['success']) {
-        echo json_encode(['success' => false, 'message' => $captchaVerify['message']]);
-        exit;
-    }
-
-    $db = db();
-    // Check admins table first for administrative priority
-    $user = $db->fetchOne("SELECT * FROM admins WHERE email = ?", [$email]);
-    $table = 'admins';
-
-    if (!$user) {
-        // Check users table
-        $user = $db->fetchOne("SELECT * FROM users WHERE email = ?", [$email]);
-        $table = 'users';
-    }
-
-    if ($user && password_verify($password, $user['password'])) {
-        // Generate OTP
-        $otp = sprintf("%06d", mt_rand(0, 999999));
-        $expires = date('Y-m-d H:i:s', strtotime('+10 minutes'));
-        
-        // Delete old OTPs for this email
-        $db->delete('otp_verifications', 'email = ?', [$email]);
-        
-        // Store new OTP
-        $db->insert('otp_verifications', [
-            'email' => $email,
-            'otp_code' => $otp,
-            'expires_at' => $expires
-        ]);
-
-        // Send OTP via Email
-        if (Mailer::sendOTP($email, $otp)) {
-            echo json_encode([
-                'success' => true, 
-                'message' => 'OTP sent to your email.'
-            ]);
-        } else {
-            // For development, if mailing fails, you might still want to see the OTP 
-            // but for production, this should be handled properly.
-            echo json_encode([
-                'success' => true, 
-                'message' => 'Login success, but failed to send email. (Check server logs)',
-                'temp_otp' => $otp // Keeping for your testing until SMT is configured
-            ]);
+        if (empty($email) || empty($password)) {
+            if (ob_get_length()) ob_clean();
+            echo json_encode(['success' => false, 'message' => 'Email and password are required.']);
+            exit;
         }
-    } else {
-        echo json_encode(['success' => false, 'message' => 'Invalid email or password.']);
+
+        // Verify CAPTCHA - DISABLED
+        /*
+        $captchaVerify = verifyTurnstile($_POST['cf-turnstile-response'] ?? null, $_SERVER['REMOTE_ADDR']);
+        if (!$captchaVerify['success']) {
+            if (ob_get_length()) ob_clean();
+            echo json_encode(['success' => false, 'message' => $captchaVerify['message']]);
+            exit;
+        }
+        */
+        $captchaVerify = ['success' => true];
+
+        $db = db();
+        // Check admins table first for administrative priority - Using case-insensitive search
+        $user = $db->fetchOne("SELECT * FROM admins WHERE LOWER(email) = LOWER(?)", [$email]);
+        $table = 'admins';
+
+        if (!$user) {
+            // Check users table - Using case-insensitive search
+            $user = $db->fetchOne("SELECT * FROM users WHERE LOWER(email) = LOWER(?)", [$email]);
+            $table = 'users';
+        }
+
+        if ($user && password_verify($password, $user['password'])) {
+            // Essential: Normalize email from DB to avoid casing issues later
+            $email = $user['email']; 
+            // Check if 2FA is enabled (Default to 1/Enabled)
+            $is2FAEnabled = (int)($user['two_factor_enabled'] ?? 1);
+
+            if ($is2FAEnabled === 0) {
+                // Bypass OTP if disabled
+                $_SESSION['user_id'] = $user['id'];
+                $_SESSION['user_email'] = $user['email'];
+                $_SESSION['user_role'] = strtolower($user['role'] ?? 'user');
+                $_SESSION['user_name'] = ($user['firstname'] ?? '') . ' ' . ($user['lastname'] ?? '');
+                $_SESSION['business_name'] = $user['business_name'] ?? null;
+                
+                try {
+                    $profile = $db->fetchOne("SELECT logo_path FROM business_profiles WHERE user_id = ?", [$user['id']]);
+                    $_SESSION['business_logo'] = ($profile && isset($profile['logo_path'])) ? $profile['logo_path'] : null;
+                } catch (Exception $e) {
+                    $_SESSION['business_logo'] = null;
+                }
+
+                // Comprehensive list of administrative roles
+                $adminRoles = ['admin', 'staff', 'superadmin', 'manager', 'administrator', 'coordinator', 'analyst'];
+                $isAdminRole = in_array($_SESSION['user_role'], $adminRoles);
+                $_SESSION['profile_completed'] = $isAdminRole ? true : (bool)($user['profile_completed'] ?? false);
+
+                $targetPage = $isAdminRole ? 'dashboard/administrator/index.php?login=success' : 
+                             ($_SESSION['profile_completed'] ? 'dashboard/users/index.php?login=success' : 'complete-profile.php');
+
+                if (ob_get_length()) ob_clean();
+                echo json_encode([
+                    'success' => true, 
+                    'message' => 'Login successful!',
+                    'no_otp' => true,
+                    'role' => $_SESSION['user_role'],
+                    'is_admin' => $isAdminRole,
+                    'profile_completed' => $_SESSION['profile_completed'],
+                    'redirect_url' => $targetPage
+                ]);
+                exit;
+            }
+
+            // Generate OTP
+            $otp = sprintf("%06d", mt_rand(0, 999999));
+            $expires = date('Y-m-d H:i:s', strtotime('+10 minutes'));
+            
+            // Delete old OTPs for this email
+            $db->delete('otp_verifications', 'email = ?', [$email]);
+            
+            // Store new OTP using MySQL NOW() for timezone consistency
+            $db->query(
+                "INSERT INTO otp_verifications (email, otp_code, expires_at) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 10 MINUTE))",
+                [$email, $otp]
+            );
+
+            if (Mailer::sendOTP($email, $otp)) {
+                if (ob_get_length()) ob_clean();
+                echo json_encode([
+                    'success' => true, 
+                    'message' => 'OTP sent successfully!',
+                    'email' => $email
+                ]);
+            } else {
+                // For development, if mailing fails, you might still want to see the OTP 
+                // but for production, this should be handled properly.
+                if (ob_get_length()) ob_clean();
+                echo json_encode([
+                    'success' => true, 
+                    'message' => 'Login success, but failed to send email. (Check server logs)',
+                    'temp_otp' => $otp // Keeping for your testing until SMT is configured
+                ]);
+            }
+            exit;
+        } else {
+            if (ob_get_length()) ob_clean();
+            echo json_encode(['success' => false, 'message' => 'Invalid email or password.']);
+            exit;
+        }
+    } catch (Exception $e) {
+        if (ob_get_length()) ob_clean();
+        echo json_encode(['success' => false, 'message' => 'Login error: ' . $e->getMessage()]);
+        exit;
     }
 }
 
 if ($action === 'verify-otp') {
-    $email = sanitize($_POST['email'] ?? '');
-    $otp = sanitize($_POST['otp'] ?? '');
+    try {
+        $email = sanitize($_POST['email'] ?? '');
+        $otp = sanitize($_POST['otp'] ?? '');
 
-    if (empty($email) || empty($otp)) {
-        echo json_encode(['success' => false, 'message' => 'Invalid request.']);
-        exit;
-    }
-
-    $db = db();
-    $verification = $db->fetchOne(
-        "SELECT * FROM otp_verifications WHERE email = ? AND otp_code = ? AND expires_at > NOW()",
-        [$email, $otp]
-    );
-
-    if ($verification) {
-        // Valid OTP
-        // Get user/admin data again - Prioritize admins
-        $user = $db->fetchOne("SELECT * FROM admins WHERE email = ?", [$email]);
-        $role = $user['role'] ?? 'admin';
-        
-        if (!$user) {
-            $user = $db->fetchOne("SELECT * FROM users WHERE email = ?", [$email]);
-            $role = $user['role'] ?? 'user';
-        }
-
-        if (!$user) {
-            echo json_encode(['success' => false, 'message' => 'User account no longer exists.']);
+        if (empty($email) || empty($otp)) {
+            echo json_encode(['success' => false, 'message' => 'Invalid request.']);
             exit;
         }
 
-        // Set session
+        $db = db();
+        
+        $verification = $db->fetchOne(
+            "SELECT * FROM otp_verifications WHERE LOWER(email) = LOWER(?) AND otp_code = ? AND expires_at > NOW()",
+            [$email, $otp]
+        );
+
+        if (!$verification) {
+            echo json_encode(['success' => false, 'message' => 'Invalid or expired OTP.']);
+            exit;
+        }
+
+        // Get user/admin data - Prioritize admins
+        $user = $db->fetchOne("SELECT * FROM admins WHERE LOWER(email) = LOWER(?)", [$email]);
+        $role = $user ? ($user['role'] ?? 'admin') : null;
+        
+        if (!$user) {
+            $user = $db->fetchOne("SELECT * FROM users WHERE LOWER(email) = LOWER(?)", [$email]);
+            $role = $user ? ($user['role'] ?? 'user') : null;
+        }
+
+        if (!$user) {
+            echo json_encode(['success' => false, 'message' => 'User account could not be found.']);
+            exit;
+        }
+
+        // Set session variables
         $_SESSION['user_id'] = $user['id'];
         $_SESSION['user_email'] = $user['email'];
-        $_SESSION['user_role'] = $role;
-        $_SESSION['user_name'] = $user['firstname'] . ' ' . $user['lastname'];
+        $_SESSION['user_role'] = strtolower($role);
+        $_SESSION['user_name'] = ($user['firstname'] ?? '') . ' ' . ($user['lastname'] ?? '');
         $_SESSION['business_name'] = $user['business_name'] ?? null;
         
-        // Administrative roles automatically bypass profile completion
-        $isAdminRole = in_array($role, ['admin', 'staff', 'superadmin', 'manager']);
+        try {
+            $profile = $db->fetchOne("SELECT logo_path FROM business_profiles WHERE user_id = ?", [$user['id']]);
+            $_SESSION['business_logo'] = ($profile && isset($profile['logo_path'])) ? $profile['logo_path'] : null;
+        } catch (Exception $e) {
+            $_SESSION['business_logo'] = null;
+        }
+        
+        $adminRoles = ['admin', 'staff', 'superadmin', 'manager', 'administrator', 'coordinator', 'analyst'];
+        $isAdminRole = in_array($_SESSION['user_role'], $adminRoles);
         $_SESSION['profile_completed'] = $isAdminRole ? true : (bool)($user['profile_completed'] ?? false);
+
+        $targetPage = $isAdminRole ? 'dashboard/administrator/index.php?login=success' : 
+                     ($_SESSION['profile_completed'] ? 'dashboard/users/index.php?login=success' : 'complete-profile.php');
 
         // Clean up OTP
         $db->delete('otp_verifications', 'email = ?', [$email]);
 
+        // Clear buffer and send success
+        if (ob_get_length()) ob_clean();
         echo json_encode([
             'success' => true, 
             'message' => 'Verification successful!',
-            'role' => $role,
+            'role' => $_SESSION['user_role'],
             'is_admin' => $isAdminRole,
-            'profile_completed' => $_SESSION['profile_completed']
+            'profile_completed' => $_SESSION['profile_completed'],
+            'redirect_url' => $targetPage
         ]);
-    } else {
-        echo json_encode(['success' => false, 'message' => 'Invalid or expired OTP.']);
+        exit;
+        
+    } catch (Exception $e) {
+        if (ob_get_length()) ob_clean();
+        echo json_encode(['success' => false, 'message' => 'System error: ' . $e->getMessage()]);
+        exit;
     }
+}
+
+
+// Logout Action
+if ($action === 'logout') {
+    $_SESSION = array();
+    if (ini_get("session.use_cookies")) {
+        $params = session_get_cookie_params();
+        setcookie(session_name(), '', time() - 42000,
+            $params["path"], $params["domain"],
+            $params["secure"], $params["httponly"]
+        );
+    }
+    session_destroy();
+    
+    // Robust redirection to root login.php
+    $php_self = $_SERVER['PHP_SELF'] ?? '/ajax/auth.php';
+    $project_root = str_replace('/ajax/auth.php', '', $php_self);
+    
+    // Ensure we redirect to the correct path
+    header("Location: " . $project_root . "/login.php");
+    exit();
 }
 
 if ($action === 'complete-profile') {
@@ -211,7 +329,6 @@ if ($action === 'complete-profile') {
             'address' => sanitize($_POST['business_address'] ?? ''),
             'registration_number' => sanitize($_POST['registration_number'] ?? ''),
             'year_started' => (int)($_POST['year_started'] ?? 0),
-            'number_of_workers' => (int)($_POST['number_of_workers'] ?? 0),
             'compliance_type' => sanitize($_POST['compliance_type'] ?? ''),
             'data_consent' => isset($_POST['privacy_consent']) ? 1 : 0
         ]);
@@ -224,7 +341,7 @@ if ($action === 'complete-profile') {
 
         $db->insert('user_products', [
             'user_id' => $userId,
-            'product_name' => sanitize($_POST['product_name'] ?? ''),
+            'product_name' => $business_name, // Use business name as default product name
             'category' => $prodCategory,
             'description' => sanitize($_POST['product_description'] ?? ''),
             'production_capacity' => sanitize($_POST['production_capacity'] ?? '') . ' kg'
@@ -232,7 +349,22 @@ if ($action === 'complete-profile') {
         
         $db->commit();
         $_SESSION['profile_completed'] = true;
-        echo json_encode(['success' => true, 'message' => 'Profile completed successfully!']);
+
+        // Notify admin of profile completion
+        addNotification("New MSME Profile", "{$_SESSION['user_name']} has completed their business profile for '{$business_name}'.", 'success', 'admin');
+
+        // Prepare response with target redirect
+        $adminRoles = ['admin', 'staff', 'superadmin', 'manager', 'administrator', 'coordinator', 'analyst'];
+        $isAdminRole = in_array(strtolower($_SESSION['user_role'] ?? ''), $adminRoles);
+        $targetPage = $isAdminRole ? 'dashboard/administrator/index.php?login=success' : 'dashboard/users/index.php?login=success';
+
+        echo json_encode([
+            'success' => true, 
+            'message' => 'Profile completed successfully!',
+            'is_admin' => $isAdminRole,
+            'role' => $_SESSION['user_role'],
+            'redirect_url' => $targetPage
+        ]);
     } catch (Throwable $e) {
         if (isset($db)) {
             $db->rollback();
@@ -240,6 +372,41 @@ if ($action === 'complete-profile') {
         error_log("Profile Completion Error: " . $e->getMessage());
         echo json_encode(['success' => false, 'message' => 'Server Error: ' . $e->getMessage()]);
     }
+}
+
+/**
+ * Get full user details for review (Admin only)
+ */
+if ($action === 'get-user-details-review') {
+    if (!isLoggedIn() || !in_array($_SESSION['user_role'], ['admin', 'staff', 'superadmin', 'manager'])) {
+        echo json_encode(['success' => false, 'message' => 'Unauthorized access.']);
+        exit;
+    }
+
+    $id = (int)($_GET['userId'] ?? 0);
+    if (!$id) {
+        echo json_encode(['success' => false, 'message' => 'Invalid user ID.']);
+        exit;
+    }
+
+    $db = db();
+    $user = $db->fetchOne("SELECT id, firstname, lastname, email, role, status, business_name, created_at FROM users WHERE id = ?", [$id]);
+    
+    if (!$user) {
+        echo json_encode(['success' => false, 'message' => 'User not found.']);
+        exit;
+    }
+
+    $profile = $db->fetchOne("SELECT * FROM business_profiles WHERE user_id = ?", [$id]);
+    $products = $db->fetchAll("SELECT * FROM user_products WHERE user_id = ?", [$id]);
+
+    echo json_encode([
+        'success' => true,
+        'user' => $user,
+        'profile' => $profile,
+        'products' => $products
+    ]);
+    exit;
 }
 
 /**
@@ -275,24 +442,84 @@ if ($action === 'update-msme') {
 
     try {
         $db = db();
+        $db->beginTransaction();
         
-        $success = $db->update('users', [
+        // 1. Update User
+        $db->update('users', [
             'firstname' => $firstname,
             'lastname' => $lastname,
             'email' => $email,
             'business_name' => $businessName,
             'role' => $role,
-            'status' => $status
+            'status' => $status,
+            'status_updated_at' => date('Y-m-d H:i:s')
         ], 'id = :target_id', ['target_id' => $id]);
 
-        if ($success || $success === 0) {
-            echo json_encode(['success' => true, 'message' => 'MSME profile updated successfully!']);
+        // 2. Update Business Profile
+        // Check if profile exists
+        $profile = $db->fetchOne("SELECT id FROM business_profiles WHERE user_id = ?", [$id]);
+        
+        $profileData = [
+            'business_type' => sanitize($_POST['business_type'] ?? ''),
+            'sector' => sanitize($_POST['sector'] ?? ''),
+            'address' => sanitize($_POST['business_address'] ?? ''),
+            'registration_number' => sanitize($_POST['registration_number'] ?? ''),
+            'year_started' => (int)($_POST['year_started'] ?? 0),
+            'compliance_type' => sanitize($_POST['compliance_type'] ?? '')
+        ];
+
+        if ($profile) {
+            $db->update('business_profiles', $profileData, 'user_id = :uid', ['uid' => $id]);
         } else {
-            echo json_encode(['success' => false, 'message' => 'Failed to execute update on database.']);
+            // Create if missing (rare but possible)
+            $profileData['user_id'] = $id;
+            $db->insert('business_profiles', $profileData);
         }
+
+        $db->commit();
+        echo json_encode(['success' => true, 'message' => 'User and Business profile updated successfully!']);
+
     } catch (Exception $e) {
+        $db->rollBack();
         echo json_encode(['success' => false, 'message' => 'Server Error: ' . $e->getMessage()]);
     }
+}
+
+/**
+ * Simple status update for administrators (Dashboard review)
+ */
+if ($action === 'update-status-simple') {
+    if (!isLoggedIn() || !in_array($_SESSION['user_role'], ['admin', 'staff', 'superadmin', 'manager'])) {
+        echo json_encode(['success' => false, 'message' => 'Unauthorized access.']);
+        exit;
+    }
+
+    $id = (int)($_POST['userId'] ?? 0);
+    $status = sanitize($_POST['status'] ?? '');
+
+    if (!$id || !$status) {
+        echo json_encode(['success' => false, 'message' => 'Missing required data.']);
+        exit;
+    }
+
+    try {
+        $db = db();
+        $success = $db->update('users', ['status' => $status], 'id = :id', ['id' => $id]);
+        
+        if ($success || $success === 0) {
+            // Log for notification
+            $user = $db->fetchOne("SELECT firstname, lastname FROM users WHERE id = ?", [$id]);
+            $msg = "User application for " . $user['firstname'] . " " . $user['lastname'] . " has been " . $status . ".";
+            addNotification("Application Updated", $msg, ($status == 'active' ? 'success' : 'warning'), 'admin');
+
+            echo json_encode(['success' => true, 'message' => 'Status updated successfully.']);
+        } else {
+            echo json_encode(['success' => false, 'message' => 'Failed to update user status.']);
+        }
+    } catch (Exception $e) {
+        echo json_encode(['success' => false, 'message' => 'Database Error: ' . $e->getMessage()]);
+    }
+    exit;
 }
 
 /**
@@ -320,20 +547,22 @@ if ($action === 'forgot-password') {
         // Delete old OTPs
         $db->delete('otp_verifications', 'email = ?', [$email]);
         
-        // Store new OTP
-        $db->insert('otp_verifications', [
-            'email' => $email,
-            'otp_code' => $otp,
-            'expires_at' => $expires
-        ]);
+        // Store new OTP using MySQL NOW() for timezone consistency
+        $db->query(
+            "INSERT INTO otp_verifications (email, otp_code, expires_at) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 10 MINUTE))",
+            [$email, $otp]
+        );
 
         if (Mailer::sendPasswordReset($email, $otp)) {
             echo json_encode(['success' => true, 'message' => 'Reset code sent to your email.']);
+            exit;
         } else {
             echo json_encode(['success' => false, 'message' => 'Failed to send email. Please try again later.']);
+            exit;
         }
     } else {
         echo json_encode(['success' => false, 'message' => 'Email address not found.']);
+        exit;
     }
 }
 
@@ -378,11 +607,147 @@ if ($action === 'reset-password') {
             // Clean up OTP
             $db->delete('otp_verifications', 'email = ?', [$email]);
             echo json_encode(['success' => true, 'message' => 'Password has been reset successfully.']);
+            exit;
         } else {
             echo json_encode(['success' => false, 'message' => 'Failed to update password. Account not found.']);
+            exit;
         }
     } else {
         echo json_encode(['success' => false, 'message' => 'Invalid or expired code.']);
+        exit;
     }
 }
 
+/**
+ * Handle Password Change from Profile
+ */
+if ($action === 'change-password') {
+    if (!isLoggedIn()) {
+        echo json_encode(['success' => false, 'message' => 'Unauthorized.']);
+        exit;
+    }
+
+    $userId = $_SESSION['user_id'];
+    $currentPassword = $_POST['current_password'] ?? '';
+    $newPassword = $_POST['new_password'] ?? '';
+
+    if (empty($currentPassword) || empty($newPassword)) {
+        echo json_encode(['success' => false, 'message' => 'All fields are required.']);
+        exit;
+    }
+
+    $db = db();
+    $user = $db->fetchOne("SELECT password FROM users WHERE id = ?", [$userId]);
+
+    if ($user && password_verify($currentPassword, $user['password'])) {
+        $hashed = password_hash($newPassword, PASSWORD_DEFAULT);
+        $db->update('users', ['password' => $hashed], 'id = :id', ['id' => $userId]);
+        echo json_encode(['success' => true, 'message' => 'Password updated successfully!']);
+        exit;
+    } else {
+        echo json_encode(['success' => false, 'message' => 'Incorrect current password.']);
+        exit;
+    }
+}
+
+/**
+ * Handle 2FA Settings Update
+ */
+if ($action === 'update-2fa') {
+    if (!isLoggedIn()) {
+        echo json_encode(['success' => false, 'message' => 'Unauthorized.']);
+        exit;
+    }
+
+    $userId = $_SESSION['user_id'];
+    $enabled = (int)($_POST['enabled'] ?? 1);
+    $db = db();
+
+    try {
+        $db->update('users', ['two_factor_enabled' => $enabled], 'id = :id', ['id' => $userId]);
+        echo json_encode(['success' => true, 'message' => '2FA settings updated.']);
+    } catch (Exception $e) {
+        if (strpos($e->getMessage(), 'Unknown column') !== false || strpos($e->getMessage(), 'two_factor_enabled') !== false) {
+            try {
+                $db->query("ALTER TABLE users ADD COLUMN two_factor_enabled TINYINT(1) DEFAULT 1 AFTER status");
+                $db->update('users', ['two_factor_enabled' => $enabled], 'id = :id', ['id' => $userId]);
+                echo json_encode(['success' => true, 'message' => '2FA settings updated (Table repaired).']);
+                exit;
+            } catch (Exception $e2) {
+                 echo json_encode(['success' => false, 'message' => 'Database error during repair: ' . $e2->getMessage()]);
+                 exit;
+            }
+        }
+        echo json_encode(['success' => false, 'message' => 'Database error: ' . $e->getMessage()]);
+    }
+}
+
+/**
+ * Handle Account Deactivation
+ */
+if ($action === 'deactivate-account') {
+    if (!isLoggedIn()) {
+        echo json_encode(['success' => false, 'message' => 'Unauthorized.']);
+        exit;
+    }
+
+    $userId = $_SESSION['user_id'];
+    $db = db();
+    
+    // Set status to deactivated instead of deleting
+    $success = $db->update('users', ['status' => 'deactivated'], 'id = :id', ['id' => $userId]);
+    
+    if ($success) {
+        session_destroy();
+        echo json_encode(['success' => true, 'message' => 'Account deactivated.']);
+    } else {
+        echo json_encode(['success' => false, 'message' => 'Failed to deactivate account.']);
+    }
+}
+
+/**
+ * Update Profile Settings (Admin & User)
+ */
+if ($action === 'update-settings-profile') {
+    if (!isLoggedIn()) {
+        echo json_encode(['success' => false, 'message' => 'Unauthorized.']);
+        exit;
+    }
+
+    $userId = $_SESSION['user_id'];
+    $firstname = sanitize($_POST['firstname'] ?? '');
+    $lastname = sanitize($_POST['lastname'] ?? '');
+    $email = sanitize($_POST['email'] ?? '');
+
+    if (empty($firstname) || empty($lastname) || empty($email)) {
+        echo json_encode(['success' => false, 'message' => 'All fields are required.']);
+        exit;
+    }
+
+    $db = db();
+    try {
+        $db->beginTransaction();
+
+        // Check which table the user belongs to
+        $isAdmin = $db->fetchOne("SELECT id FROM admins WHERE id = ?", [$userId]);
+        $table = $isAdmin ? 'admins' : 'users';
+
+        // Update Record
+        $db->update($table, [
+            'firstname' => $firstname,
+            'lastname' => $lastname,
+            'email' => $email
+        ], 'id = :id', ['id' => $userId]);
+
+        // Update Session
+        $_SESSION['user_name'] = $firstname . ' ' . $lastname;
+        $_SESSION['user_email'] = $email;
+
+        $db->commit();
+        echo json_encode(['success' => true, 'message' => 'Profile updated successfully!']);
+    } catch (Exception $e) {
+        if (isset($db)) $db->rollBack();
+        echo json_encode(['success' => false, 'message' => 'Update Error: ' . $e->getMessage()]);
+    }
+    exit;
+}

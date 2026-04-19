@@ -5,6 +5,18 @@ require_once 'includes/init.php';
 $db = db();
 $userCount = $db->fetchOne("SELECT COUNT(*) as count FROM users")['count'];
 $productCount = $db->fetchOne("SELECT COUNT(*) as count FROM user_products UP JOIN users U ON UP.user_id = U.id WHERE U.status = 'active'")['count'];
+
+// Fetch Featured Products (Approved in Registry or Export Management)
+$featuredProducts = $db->fetchAll("
+    SELECT DISTINCT p.*, u.business_name 
+    FROM user_products p 
+    JOIN users u ON p.user_id = u.id 
+    WHERE p.status = 'approved'
+    ORDER BY RAND() 
+    LIMIT 6
+");
+
+
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -17,6 +29,7 @@ $productCount = $db->fetchOne("SELECT COUNT(*) as count FROM user_products UP JO
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
         rel="stylesheet">
     <link rel="stylesheet" href="css/landing.css?v=2.0">
+    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
 </head>
 
 <body>
@@ -34,9 +47,9 @@ $productCount = $db->fetchOne("SELECT COUNT(*) as count FROM user_products UP JO
                 <ul class="nav-links">
                     <li><a href="#home">Home</a></li>
                     <li><a href="#services">Services</a></li>
-                    <li><a href="#about">About Us</a></li>
+
                     <li><a href="#how-it-works">How It Works</a></li>
-                    <li><a href="#news">News</a></li>
+                    <li><a href="#products">Featured Products</a></li>
                 </ul>
                 <div class="nav-btns">
                     <a href="login.php" class="btn-nav-login">Login</a>
@@ -141,57 +154,7 @@ $productCount = $db->fetchOne("SELECT COUNT(*) as count FROM user_products UP JO
         </div>
     </section>
 
-    <!-- About Us Section -->
-    <section id="about" class="about">
-        <div class="container">
-            <div class="about-wrapper">
-                <div class="about-text">
-                    <span class="badge">Our Mission & Vision</span>
-                    <h2>Driving Economic Growth Through <span class="highlight">Innovation</span></h2>
-                    <p>Local Government Unit 3 is dedicated to transforming the local business landscape. Our Local
-                        Product & Export Development program is designed to bridge the gap between rural production and
-                        global markets.</p>
 
-                    <div class="about-features">
-                        <div class="feature-item">
-                            <div class="f-icon"><i class="fas fa-rocket"></i></div>
-                            <div class="f-text">
-                                <h4>Global Competitiveness</h4>
-                                <p>We equip MSMEs with the tools and standards required to compete in the international
-                                    arena.</p>
-                            </div>
-                        </div>
-                        <div class="feature-item">
-                            <div class="f-icon"><i class="fas fa-leaf"></i></div>
-                            <div class="f-text">
-                                <h4>Sustainable Development</h4>
-                                <p>Promoting eco-friendly production methods and sustainable sourcing for local
-                                    materials.</p>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                <div class="about-stats-grid">
-                    <div class="stat-card">
-                        <span class="stat-number">500+</span>
-                        <span class="stat-label">MSMEs Assisted</span>
-                    </div>
-                    <div class="stat-card active">
-                        <span class="stat-number">₱1.2B</span>
-                        <span class="stat-label">Export Revenue Generated</span>
-                    </div>
-                    <div class="stat-card">
-                        <span class="stat-number">45+</span>
-                        <span class="stat-label">International Partners</span>
-                    </div>
-                    <div class="stat-card">
-                        <span class="stat-number">100%</span>
-                        <span class="stat-label">Digitalized Workflow</span>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </section>
 
     <!-- How It Works Section -->
     <section id="how-it-works" class="how-it-works">
@@ -236,53 +199,74 @@ $productCount = $db->fetchOne("SELECT COUNT(*) as count FROM user_products UP JO
         </div>
     </section>
 
-    <!-- News Section -->
-    <section id="news" class="news">
+    <!-- Featured Products Section -->
+    <section id="products" class="products">
         <div class="container">
             <div class="section-header">
-                <h2>Latest Announcements</h2>
-                <p>Stay updated with the latest happenings and official news from LGU 3.</p>
+                <h2>Featured Local Products</h2>
+                <p>Discover the finest products from our LGU, verified and ready for the global market.</p>
             </div>
-            <div class="news-grid">
-                <article class="news-item">
-                    <div class="news-thumb">
-                        <img src="https://images.unsplash.com/photo-1541873676947-d6b2c9b99264?q=80&w=2070&auto=format&fit=crop"
-                            alt="News 1">
-                    </div>
-                    <div class="news-content">
-                        <span class="date">Feb 07, 2024</span>
-                        <h3>New Digitized Export Certification System</h3>
-                        <p>LGU 3 introduces a seamless way for local producers to apply for export clearances online...
+
+            <!-- Search and Filter Bar -->
+            <div class="product-filters">
+                <div class="search-box">
+                    <i class="fas fa-search"></i>
+                    <input type="text" id="product-search" placeholder="Search by name or business...">
+                </div>
+                <div class="filter-controls">
+                    <select id="category-filter">
+                        <option value="">All Categories</option>
+                        <option value="Food & Beverages">Food & Beverages</option>
+                        <option value="Arts & Crafts">Arts & Crafts</option>
+                        <option value="Home & Living">Home & Living</option>
+                        <option value="Fashion & Apparels">Fashion & Apparels</option>
+                        <option value="Health & Wellness">Health & Wellness</option>
+                        <option value="Cosmetics">Cosmetics</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="products-grid" id="featured-products-grid">
+                <?php if (empty($featuredProducts)): ?>
+                    <div class="no-products-msg"
+                        style="grid-column: 1 / -1; text-align: center; padding: 60px; background: var(--bg-dark-alt); border-radius: 20px;">
+                        <i class="fas fa-box-open"
+                            style="font-size: 48px; color: var(--text-muted); opacity: 0.3; margin-bottom: 20px;"></i>
+                        <p style="color: var(--text-muted);">No featured products available at the moment. Check back soon!
                         </p>
-                        <a href="#">Read More</a>
                     </div>
-                </article>
-                <article class="news-item">
-                    <div class="news-thumb">
-                        <img src="https://images.unsplash.com/photo-1544161515-4ab6ce6db874?q=80&w=2070&auto=format&fit=crop"
-                            alt="News 2">
-                    </div>
-                    <div class="news-content">
-                        <span class="date">Feb 05, 2024</span>
-                        <h3>Upcoming Branding & Packaging Workshop</h3>
-                        <p>Join our expert-led session on how to transform your local product's visual identity for the
-                            global market...</p>
-                        <a href="#">Read More</a>
-                    </div>
-                </article>
-                <article class="news-item">
-                    <div class="news-thumb">
-                        <img src="https://images.unsplash.com/photo-1550751827-4bd374c3f58b?q=80&w=2070&auto=format&fit=crop"
-                            alt="News 3">
-                    </div>
-                    <div class="news-content">
-                        <span class="date">Feb 02, 2024</span>
-                        <h3>MSME Success Story: From Local to Global</h3>
-                        <p>Learn how a small bamboo craft business from LGU 3 reached markets in Europe through our
-                            program...</p>
-                        <a href="#">Read More</a>
-                    </div>
-                </article>
+                <?php else: ?>
+                    <?php foreach ($featuredProducts as $product):
+                        $images = !empty($product['product_images']) ? json_decode($product['product_images'], true) : [];
+                        $mainImage = !empty($images) ? $images[0] : 'https://images.unsplash.com/photo-1586201375761-83865001e31c?q=80&w=2070&auto=format&fit=crop';
+                        ?>
+                        <div class="product-card">
+                            <div class="product-thumb">
+                                <img src="<?php echo htmlspecialchars($mainImage); ?>"
+                                    alt="<?php echo htmlspecialchars($product['product_name']); ?>">
+                                <div class="product-badge">Verified</div>
+                            </div>
+                            <div class="product-info">
+                                <span class="business-name"><?php echo htmlspecialchars($product['business_name']); ?></span>
+                                <h3><?php echo htmlspecialchars($product['product_name']); ?></h3>
+                                <p class="product-desc">
+                                    <?php echo htmlspecialchars(mb_strimwidth($product['description'] ?? '', 0, 80, "...")); ?>
+                                </p>
+                                <div class="product-footer">
+                                    <span class="price">₱<?php echo number_format($product['srp'], 2); ?></span>
+                                    <a href="javascript:void(0)" class="view-btn open-product-modal"
+                                        data-product='<?php echo htmlspecialchars(json_encode($product)); ?>'>View Details</a>
+                                </div>
+                            </div>
+                        </div>
+                    <?php endforeach; ?>
+                <?php endif; ?>
+            </div>
+
+            <div class="show-more-container">
+                <button id="show-more-products" class="btn-show-more">
+                    <i class="fas fa-plus-circle"></i> Show More Products
+                </button>
             </div>
         </div>
     </section>
@@ -321,6 +305,108 @@ $productCount = $db->fetchOne("SELECT COUNT(*) as count FROM user_products UP JO
     </footer>
 
     <!-- Modals -->
+    <div id="product-details-modal" class="modal">
+        <div class="modal-content product-modal-content">
+            <span class="close-modal" data-modal="product-details-modal">&times;</span>
+            <div class="product-modal-body">
+                <div class="product-gallery">
+                    <a id="modal-image-link" href="" target="_blank"
+                        style="display: block; width: 100%; height: 100%; cursor: zoom-in;">
+                        <img id="modal-product-image" src="" alt="Product Image">
+                    </a>
+                </div>
+                <div class="product-details-info" style="max-height: 70vh; overflow-y: auto; padding-right: 10px;">
+                    <span id="modal-business-name" class="business-name"></span>
+                    <h2 id="modal-product-name"></h2>
+                    <div id="modal-product-price" class="price"
+                        style="margin-bottom: 20px; font-size: 28px; color: #fff;"></div>
+
+                    <div class="details-section">
+                        <h3 style="color: var(--primary-color); margin-bottom: 10px;">Description</h3>
+                        <p id="modal-product-description"
+                            style="color: var(--text-muted); font-size: 14px; margin-bottom: 20px;"></p>
+                    </div>
+
+                    <div class="details-grid">
+                        <div class="detail-item">
+                            <label
+                                style="display: block; font-size: 11px; text-transform: uppercase; color: var(--primary-color); font-weight: 700;">Category</label>
+                            <span id="modal-product-category" style="color: #fff; font-size: 15px;"></span>
+                        </div>
+                        <div class="detail-item">
+                            <label
+                                style="display: block; font-size: 11px; text-transform: uppercase; color: var(--primary-color); font-weight: 700;">Ingredients</label>
+                            <span id="modal-product-ingredients" style="color: #fff; font-size: 15px;"></span>
+                        </div>
+                        <div class="detail-item">
+                            <label
+                                style="display: block; font-size: 11px; text-transform: uppercase; color: var(--primary-color); font-weight: 700;">Shelf
+                                Life</label>
+                            <span id="modal-product-shelf-life" style="color: #fff; font-size: 15px;"></span>
+                        </div>
+                        <div class="detail-item">
+                            <label
+                                style="display: block; font-size: 11px; text-transform: uppercase; color: var(--primary-color); font-weight: 700;">Net
+                                Weight</label>
+                            <span id="modal-product-net-weight" style="color: #fff; font-size: 15px;"></span>
+                        </div>
+                        <div class="detail-item">
+                            <label
+                                style="display: block; font-size: 11px; text-transform: uppercase; color: var(--primary-color); font-weight: 700;">Available
+                                Volume</label>
+                            <span id="modal-product-volume" style="color: #fff; font-size: 15px;"></span>
+                        </div>
+                        <div class="detail-item">
+                            <label
+                                style="display: block; font-size: 11px; text-transform: uppercase; color: var(--primary-color); font-weight: 700;">Market</label>
+                            <span id="modal-product-market" style="color: #fff; font-size: 15px;"></span>
+                        </div>
+                    </div>
+
+                    <div class="product-inquiry-section"
+                        style="margin-top: 30px; border-top: 1px solid var(--border-color); padding-top: 25px;">
+                        <h3 style="color: var(--primary-color); margin-bottom: 15px; font-size: 18px;">Interested in
+                            this product?</h3>
+                        <p style="color: var(--text-muted); font-size: 13px; margin-bottom: 20px;">Send a direct inquiry
+                            to the producer below.</p>
+
+                        <form id="public-inquiry-form" class="inquiry-form">
+                            <input type="hidden" id="inquiry-product-id" name="product_id">
+                            <div class="form-grid"
+                                style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px;">
+                                <div class="form-group">
+                                    <input type="text" name="name" placeholder="Your Name" required
+                                        style="width: 100%; padding: 12px; border-radius: 8px; background: rgba(255,255,255,0.05); border: 1px solid var(--border-color); color: #fff;">
+                                </div>
+                                <div class="form-group">
+                                    <input type="email" name="email" placeholder="Your Email" required
+                                        style="width: 100%; padding: 12px; border-radius: 8px; background: rgba(255,255,255,0.05); border: 1px solid var(--border-color); color: #fff;">
+                                </div>
+                            </div>
+                            <div class="form-group" style="margin-bottom: 15px;">
+                                <textarea name="message"
+                                    placeholder="I am interested in this product. Please provide more details on bulk ordering..."
+                                    required
+                                    style="width: 100%; padding: 12px; border-radius: 8px; background: rgba(255,255,255,0.05); border: 1px solid var(--border-color); color: #fff; height: 100px; resize: none;"></textarea>
+                            </div>
+
+                            <!-- <div class="captcha-box">
+                                <div class="cf-turnstile"
+                                    data-sitekey="<?php echo defined('TURNSTILE_SITE_KEY') ? TURNSTILE_SITE_KEY : ''; ?>"
+                                    data-theme="dark" data-size="normal"></div>
+                            </div> -->
+
+                            <button type="submit" class="primary-btn"
+                                style="width: 100%; padding: 14px; border: none; border-radius: 8px; cursor: pointer; font-weight: 700;">
+                                <i class="fas fa-paper-plane"></i> Send Inquiry
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div id="privacy-modal" class="modal">
         <div class="modal-content">
             <span class="close-modal" data-modal="privacy-modal">&times;</span>
@@ -433,6 +519,15 @@ $productCount = $db->fetchOne("SELECT COUNT(*) as count FROM user_products UP JO
             </div>
         </div>
     </div>
+
+    <!-- Image Preview Modal -->
+    <div id="image-preview-modal" class="modal image-viewer-modal">
+        <span class="close-modal preview-close" data-modal="image-preview-modal">&times;</span>
+        <div class="preview-container">
+            <img id="preview-image" src="" alt="Enlarged Product Image">
+        </div>
+    </div>
+
 
     <script src="js/news-api.js"></script>
     <script src="js/landing.js"></script>

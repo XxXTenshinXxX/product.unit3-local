@@ -84,6 +84,10 @@
                     </label>
                 </div>
 
+                <!-- <div class="captcha-container" id="captcha-box">
+                    <div class="cf-turnstile" data-sitekey="<?php echo defined('TURNSTILE_SITE_KEY') ? TURNSTILE_SITE_KEY : ''; ?>" data-theme="dark"></div>
+                </div> -->
+
                 <button type="submit" class="btn-auth">Create Account</button>
             </form>
 
@@ -92,6 +96,7 @@
             </div>
         </div>
     </div>
+    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
     <script src="js/auth.js"></script>
 </body>
 
